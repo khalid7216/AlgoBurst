@@ -1,4 +1,5 @@
-import base64, binascii, urllib.parse, html, codecs, string, os, subprocess, re
+import base64, binascii, urllib.parse, html, codecs, string, os, subprocess
+
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
@@ -11,79 +12,97 @@ class AlgoBurstMaster:
         self.printable = set(string.printable)
 
     def is_readable(self, text):
-        if not text: return False
-        # Limit hata di hai, ab choti se choti string (2 chars) bhi pick hogi
+        """Checks if the output is human-readable and not junk/Chinese symbols."""
+        if not text or len(text) < 2: return False
         printable_chars = sum(1 for char in text if char in self.printable)
         ratio = printable_chars / len(text)
-        # Junk filter: 80% readable ho toh kafi hai (taake code snippets miss na hon)
-        return ratio > 0.8 
+        return ratio > 0.9  # 90% readable text required
 
-    def add(self, cat, method, val, original):
-        try:
-            val_str = str(val).strip()
-            # Validation: Input se alag ho aur readable ho
-            if val_str.lower() != original.lower() and self.is_readable(val_str):
-                if not any(val_str == res[2] for res in self.results):
-                    self.results.append([cat, method, val_str])
-        except: pass
+    def rot13_decode(self, text):
+        return codecs.encode(text, 'rot_13')
 
-    def burst(self, data):
-        self.results = []
-        # Cleaning data: Agar aapne code se copy kiya hai toh extra spaces hata dega
-        data = data.strip().split()[0] if data.strip() else ""
-        if not data: return []
+    def rot47_decode(self, text):
+        x = []
+        for i in range(len(text)):
+            j = ord(text[i])
+            if 33 <= j <= 126:
+                x.append(chr(33 + ((j - 33 + 47) % 94)))
+            else:
+                x.append(text[i])
+        return "".join(x)
 
-        # --- 1. BASE FAMILY (Full Power) ---
-        try: self.add("Base", "Base64", base64.b64decode(data).decode('utf-8'), data)
-        except: pass
-        try: self.add("Base", "Base32", base64.b32decode(data).decode('utf-8'), data)
-        except: pass
-        try: self.add("Base", "Hex", binascii.unhexlify(data).decode('utf-8'), data)
-        except: pass
-        try: 
-            import base58
-            self.add("Base", "Base58", base58.b58decode(data).decode('utf-8'), data)
-        except: pass
+    def try_decode_layer(self, data):
+        """Tries all algorithms on a single layer of data."""
+        methods = [
+            ("Base64", lambda d: base64.b64decode(d).decode('utf-8')),
+            ("Hex", lambda d: binascii.unhexlify(d).decode('utf-8')),
+            ("URL", lambda d: urllib.parse.unquote(d)),
+            ("HTML", lambda d: html.unescape(d)),
+            ("ROT13", lambda d: self.rot13_decode(d)),
+            ("ROT47", lambda d: self.rot47_decode(d)),
+            ("Unicode-Escape", lambda d: codecs.decode(d, 'unicode_escape'))
+        ]
+        
+        valid_decodings = []
+        for name, func in methods:
+            try:
+                decoded = func(data)
+                if decoded.strip() and decoded != data and self.is_readable(decoded):
+                    valid_decodings.append((name, decoded))
+            except: continue
+        return valid_decodings
 
-        # --- 2. WEB & SYSTEM ---
-        try: self.add("Web", "URL/Percent", urllib.parse.unquote(data), data)
-        except: pass
-        try: self.add("Web", "HTML Entity", html.unescape(data), data)
-        except: pass
-        try: self.add("System", "Unicode Escape", codecs.decode(data, 'unicode_escape'), data)
-        except: pass
+    def burst_recursive(self, data, depth=0, chain=""):
+        """Recursive function to handle multiple layers of encoding."""
+        if depth > 5: return # Stop after 5 layers to prevent infinite loops
+        
+        decodings = self.try_decode_layer(data)
+        
+        for name, decoded in decodings:
+            new_chain = f"{chain} -> {name}" if chain else name
+            # Check if we can decode it further (Recursive call)
+            deeper_results = self.try_decode_layer(decoded)
+            
+            if deeper_results:
+                self.burst_recursive(decoded, depth + 1, new_chain)
+            else:
+                # Store final result
+                if not any(decoded == res[2] for res in self.results):
+                    self.results.append(["Recursive", new_chain, decoded])
 
-        return self.results
+def update_tool():
+    console.print("[bold yellow][*] Pulling latest updates...[/bold yellow]")
+    try:
+        subprocess.run(["git", "pull"], check=True)
+        console.print("[bold green][+] Tool updated successfully![/bold green]")
+    except:
+        console.print("[bold red][!] Git pull failed.[/bold red]")
 
 def main():
     while True:
         os.system('clear')
-        console.print(Panel.fit("💀 ALGOBURST: SOURCE REVIEW MODE 💀\n[dim]No Limits | 'u' Update | 'q' Quit[/dim]", style="bold cyan"))
+        console.print(Panel.fit("💀 ALGOBURST ULTIMATE: RECURSIVE EDITION 💀\n[dim]'u' Update | 'q' Quit | 'c' Clear[/dim]", style="bold magenta"))
         
-        payload = console.input("[bold yellow]Paste String from Code: [/bold yellow]").strip()
+        payload = console.input("[bold yellow]Input Encoded Data: [/bold yellow]").strip()
         
-        if payload.lower() == 'u':
-            try:
-                subprocess.run(["git", "pull"], check=True)
-                console.print("[green]Updated![/green]"); input(); continue
-            except: pass
+        if payload.lower() == 'u': update_tool(); input("\nEnter to continue..."); continue
         elif payload.lower() == 'q': break
+        elif not payload: continue
         
-        # Multiple strings handling (agar line mein space ho toh ye first part lega)
         master = AlgoBurstMaster()
-        results = master.burst(payload)
+        master.burst_recursive(payload)
         
-        if results:
-            table = Table(show_header=True, header_style="bold magenta")
-            table.add_column("Category", style="cyan")
-            table.add_column("Algo", style="yellow")
-            table.add_column("Output", style="green")
-            for r in results: table.add_row(r[0], r[1], r[2])
+        if master.results:
+            table = Table(title="Decoded Chains (Multi-Layer)", show_header=True, header_style="bold cyan")
+            table.add_column("Type", style="magenta")
+            table.add_column("Algorithm Chain", style="yellow")
+            table.add_column("Final Output", style="green")
+            for r in master.results: table.add_row(r[0], r[1], r[2])
             console.print(table)
         else:
-            console.print("[bold red][!] Nothing hidden here.[/bold red]")
+            console.print("[bold red][!] No valid decoding chain found.[/bold red]")
         
-        input("\n[dim]Press Enter for next string...[/dim]")
+        input("\n[dim]Press Enter for next scan...[/dim]")
 
 if __name__ == "__main__":
     main()
