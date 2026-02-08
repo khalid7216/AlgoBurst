@@ -1,9 +1,4 @@
-import base64, binascii, urllib.parse, html, codecs, json, yaml, zlib, gzip, bz2, re
-try:
-    import base58, base62, brotli, base91
-except ImportError:
-    pass
-
+import base64, binascii, urllib.parse, html, codecs, string, os, subprocess
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
@@ -13,105 +8,79 @@ console = Console()
 class AlgoBurstMaster:
     def __init__(self):
         self.results = []
+        # Sirf printable characters aur common symbols
+        self.printable = set(string.printable)
 
-    def add(self, cat, method, val):
-        if val and str(val).strip():
-            self.results.append([cat, method, str(val)[:100] + "..." if len(str(val)) > 100 else str(val)])
+    def is_readable(self, text):
+        if not text or len(text) < 2: return False
+        # Junk character detection logic
+        non_printable = sum(1 for char in text if char not in self.printable)
+        # Agar 10% se zyada junk characters hain toh reject kar do
+        if non_printable / len(text) > 0.10: return False
+        # Agar text mein ajeeb symbols (like ) hain toh reject karo
+        if "" in text: return False
+        return True
+
+    def add(self, cat, method, val, original):
+        try:
+            val_str = str(val).strip()
+            # Validation: Junk filter + Anti-Echo logic
+            if val_str != original and self.is_readable(val_str):
+                # Duplicate check
+                if not any(val_str == res[2] for res in self.results):
+                    self.results.append([cat, method, val_str])
+        except: pass
 
     def burst(self, data):
         self.results = []
-        raw_bytes = data.encode('utf-8', errors='ignore')
-        
-        # 1. BASE FAMILY (100% Coverage)
-        try: self.add("Base", "Base16 (Hex)", binascii.unhexlify(data).decode('utf-8', 'ignore'))
+        # --- BASE FAMILY ---
+        try: self.add("Base", "Base64", base64.b64decode(data).decode('utf-8'), data)
         except: pass
-        try: self.add("Base", "Base32", base64.b32decode(data).decode('utf-8', 'ignore'))
+        try: self.add("Base", "Base32", base64.b32decode(data).decode('utf-8'), data)
         except: pass
-        try: self.add("Base", "Base58 (Bitcoin)", base58.b58decode(data).decode('utf-8', 'ignore'))
-        except: pass
-        try: self.add("Base", "Base62", base62.decode(data))
-        except: pass
-        try: self.add("Base", "Base64", base64.b64decode(data).decode('utf-8', 'ignore'))
-        except: pass
-        try: self.add("Base", "Base85 (Ascii85)", base64.b85decode(data).decode('utf-8', 'ignore'))
-        except: pass
-        try: self.add("Base", "Base91", base91.decode(data).decode('utf-8', 'ignore'))
+        try: self.add("Base", "Hex", binascii.unhexlify(data).decode('utf-8'), data)
         except: pass
 
-        # 2. BINARY / SYSTEM / ENCODING
-        try:
-            binary_clean = data.replace(" ", "")
-            if all(c in '01' for c in binary_clean):
-                n = int(binary_clean, 2)
-                self.add("Binary", "Binary -> Text", n.to_bytes((n.bit_length() + 7) // 8, 'big').decode())
+        # --- WEB & URL ---
+        try: self.add("Web", "URL/Percent", urllib.parse.unquote(data), data)
         except: pass
-        try: self.add("System", "Octal", ''.join([chr(int(x, 8)) for x in re.findall(r'\\([0-7]{3})', data)]))
-        except: pass
-        try: self.add("System", "Decimal", ''.join([chr(int(x)) for x in re.findall(r'\d+', data) if 31 < int(x) < 127]))
-        except: pass
-
-        # 3. WEB / URL / EMAIL
-        try: self.add("Web", "URL/Percent", urllib.parse.unquote(data))
-        except: pass
-        try: self.add("Web", "HTML Entity", html.unescape(data))
-        except: pass
-        try: self.add("Email", "Quoted-Printable", codecs.decode(raw_bytes, 'quopri').decode('utf-8', 'ignore'))
-        except: pass
-        try: self.add("Email", "UUEncode", codecs.decode(raw_bytes, 'uu').decode('utf-8', 'ignore'))
-        except: pass
-
-        # 4. COMPRESSION (Decompression)
-        try: 
-            b64_raw = base64.b64decode(data)
-            try: self.add("Compression", "Zlib", zlib.decompress(b64_raw).decode('utf-8', 'ignore'))
-            except: pass
-            try: self.add("Compression", "Gzip", gzip.decompress(b64_raw).decode('utf-8', 'ignore'))
-            except: pass
-            try: self.add("Compression", "Brotli", brotli.decompress(b64_raw).decode('utf-8', 'ignore'))
-            except: pass
-        except: pass
-
-        # 5. CHARACTER SETS / LEGACY (The Full List)
-        charsets = [
-            'utf-8', 'utf-16', 'utf-32', 'ascii', 'latin-1', 'iso-8859-1', 'iso-8859-2', 
-            'iso-8859-6', 'iso-8859-8', 'cp1250', 'cp1252', 'shift-jis', 'gbk', 'big5', 'koi8-r'
-        ]
-        for s in charsets:
-            try:
-                dec = raw_bytes.decode(s)
-                if dec != data and len(dec) > 2:
-                    self.add("Charset/Legacy", s.upper(), dec)
-            except: pass
-
-        # 6. DATA & PROGRAMMING
-        try: 
-            if "{" in data or "[" in data:
-                self.add("Data", "JSON/YAML", json.loads(data))
-        except: pass
-        try: self.add("Programming", "Unicode Escape", codecs.decode(data, 'unicode_escape'))
+        try: self.add("Web", "HTML Entity", html.unescape(data), data)
         except: pass
 
         return self.results
 
+def update_tool():
+    console.print("[bold yellow][*] Checking for updates...[/bold yellow]")
+    try:
+        subprocess.run(["git", "pull"], check=True)
+        console.print("[bold green][+] Tool updated successfully![/bold green]")
+    except Exception as e:
+        console.print(f"[bold red][!] Update failed: {e}[/bold red]")
+
 def main():
-    master = AlgoBurstMaster()
-    console.print(Panel.fit("💀 ALGOBURST ULTIMATE: NO COMPROMISE EDITION 💀", style="bold red"))
+    os.system('clear')
+    console.print(Panel.fit("💀 ALGOBURST ULTIMATE 💀\n[dim]Press 'u' to Update | 'q' to Quit[/dim]", style="bold green"))
     
     payload = console.input("[bold yellow]Input Encoded Data: [/bold yellow]")
     
+    if payload.lower() == 'u':
+        update_tool()
+        return
+    elif payload.lower() == 'q':
+        return
+    
+    master = AlgoBurstMaster()
     results = master.burst(payload)
     
     if results:
-        table = Table(title="Decoded Results", show_header=True, header_style="bold blue")
-        table.add_column("Category", style="cyan")
-        table.add_column("Algorithm", style="green")
-        table.add_column("Output", style="white")
-        
-        for r in results:
-            table.add_row(r[0], r[1], r[2])
+        table = Table(title="Clean Decoded Results", show_header=True, header_style="bold cyan")
+        table.add_column("Category", style="magenta")
+        table.add_column("Algorithm", style="yellow")
+        table.add_column("Output", style="green")
+        for r in results: table.add_row(r[0], r[1], r[2])
         console.print(table)
     else:
-        console.print("[bold red][!] No matching algorithm found for this input.[/bold red]")
+        console.print("[bold red][!] No valid readable data found.[/bold red]")
 
 if __name__ == "__main__":
     main()
