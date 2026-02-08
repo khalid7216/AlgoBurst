@@ -1,4 +1,4 @@
-import base64, binascii, urllib.parse, html, codecs, string, os, subprocess
+import base64, binascii, urllib.parse, html, codecs, string, os, subprocess, re
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
@@ -8,79 +8,82 @@ console = Console()
 class AlgoBurstMaster:
     def __init__(self):
         self.results = []
-        # Sirf printable characters aur common symbols
         self.printable = set(string.printable)
 
     def is_readable(self, text):
-        if not text or len(text) < 2: return False
-        # Junk character detection logic
-        non_printable = sum(1 for char in text if char not in self.printable)
-        # Agar 10% se zyada junk characters hain toh reject kar do
-        if non_printable / len(text) > 0.10: return False
-        # Agar text mein ajeeb symbols (like ) hain toh reject karo
-        if "" in text: return False
-        return True
+        if not text: return False
+        # Limit hata di hai, ab choti se choti string (2 chars) bhi pick hogi
+        printable_chars = sum(1 for char in text if char in self.printable)
+        ratio = printable_chars / len(text)
+        # Junk filter: 80% readable ho toh kafi hai (taake code snippets miss na hon)
+        return ratio > 0.8 
 
     def add(self, cat, method, val, original):
         try:
             val_str = str(val).strip()
-            # Validation: Junk filter + Anti-Echo logic
-            if val_str != original and self.is_readable(val_str):
-                # Duplicate check
+            # Validation: Input se alag ho aur readable ho
+            if val_str.lower() != original.lower() and self.is_readable(val_str):
                 if not any(val_str == res[2] for res in self.results):
                     self.results.append([cat, method, val_str])
         except: pass
 
     def burst(self, data):
         self.results = []
-        # --- BASE FAMILY ---
+        # Cleaning data: Agar aapne code se copy kiya hai toh extra spaces hata dega
+        data = data.strip().split()[0] if data.strip() else ""
+        if not data: return []
+
+        # --- 1. BASE FAMILY (Full Power) ---
         try: self.add("Base", "Base64", base64.b64decode(data).decode('utf-8'), data)
         except: pass
         try: self.add("Base", "Base32", base64.b32decode(data).decode('utf-8'), data)
         except: pass
         try: self.add("Base", "Hex", binascii.unhexlify(data).decode('utf-8'), data)
         except: pass
+        try: 
+            import base58
+            self.add("Base", "Base58", base58.b58decode(data).decode('utf-8'), data)
+        except: pass
 
-        # --- WEB & URL ---
+        # --- 2. WEB & SYSTEM ---
         try: self.add("Web", "URL/Percent", urllib.parse.unquote(data), data)
         except: pass
         try: self.add("Web", "HTML Entity", html.unescape(data), data)
         except: pass
+        try: self.add("System", "Unicode Escape", codecs.decode(data, 'unicode_escape'), data)
+        except: pass
 
         return self.results
 
-def update_tool():
-    console.print("[bold yellow][*] Checking for updates...[/bold yellow]")
-    try:
-        subprocess.run(["git", "pull"], check=True)
-        console.print("[bold green][+] Tool updated successfully![/bold green]")
-    except Exception as e:
-        console.print(f"[bold red][!] Update failed: {e}[/bold red]")
-
 def main():
-    os.system('clear')
-    console.print(Panel.fit("💀 ALGOBURST ULTIMATE 💀\n[dim]Press 'u' to Update | 'q' to Quit[/dim]", style="bold green"))
-    
-    payload = console.input("[bold yellow]Input Encoded Data: [/bold yellow]")
-    
-    if payload.lower() == 'u':
-        update_tool()
-        return
-    elif payload.lower() == 'q':
-        return
-    
-    master = AlgoBurstMaster()
-    results = master.burst(payload)
-    
-    if results:
-        table = Table(title="Clean Decoded Results", show_header=True, header_style="bold cyan")
-        table.add_column("Category", style="magenta")
-        table.add_column("Algorithm", style="yellow")
-        table.add_column("Output", style="green")
-        for r in results: table.add_row(r[0], r[1], r[2])
-        console.print(table)
-    else:
-        console.print("[bold red][!] No valid readable data found.[/bold red]")
+    while True:
+        os.system('clear')
+        console.print(Panel.fit("💀 ALGOBURST: SOURCE REVIEW MODE 💀\n[dim]No Limits | 'u' Update | 'q' Quit[/dim]", style="bold cyan"))
+        
+        payload = console.input("[bold yellow]Paste String from Code: [/bold yellow]").strip()
+        
+        if payload.lower() == 'u':
+            try:
+                subprocess.run(["git", "pull"], check=True)
+                console.print("[green]Updated![/green]"); input(); continue
+            except: pass
+        elif payload.lower() == 'q': break
+        
+        # Multiple strings handling (agar line mein space ho toh ye first part lega)
+        master = AlgoBurstMaster()
+        results = master.burst(payload)
+        
+        if results:
+            table = Table(show_header=True, header_style="bold magenta")
+            table.add_column("Category", style="cyan")
+            table.add_column("Algo", style="yellow")
+            table.add_column("Output", style="green")
+            for r in results: table.add_row(r[0], r[1], r[2])
+            console.print(table)
+        else:
+            console.print("[bold red][!] Nothing hidden here.[/bold red]")
+        
+        input("\n[dim]Press Enter for next string...[/dim]")
 
 if __name__ == "__main__":
     main()
