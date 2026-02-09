@@ -1,4 +1,4 @@
-import base64, binascii, urllib.parse, html, codecs, string, os, re, subprocess
+import base64, binascii, urllib.parse, html, codecs, string, os, re
 
 from rich.console import Console
 from rich.table import Table
@@ -12,87 +12,80 @@ class AlgoBurstMaster:
         self.printable = set(string.printable)
 
     def clean_input(self, data):
-        """CyberChef Hexdump aur kachra saaf karne ke liye"""
-        data_stripped = data.strip()
-        # Agar data Hexdump format mein hai
-        if re.search(r'^[0-9a-fA-F]{8}', data_stripped):
-            lines = data_stripped.split('\n')
-            cleaned = ""
-            for line in lines:
-                line = re.sub(r'^[0-9a-fA-F]{8}', '', line) # Remove Address
-                if "|" in line: line = line.split("|")[0] # Remove Sidebar
-                cleaned += line.strip() + " "
-            return re.sub(r'[^0-9a-fA-F]', '', cleaned)
-        return data_stripped
-
-    def is_readable(self, text):
-        """Smart validation for small and large strings"""
-        if not text or len(text) < 1: return False
-        p_count = sum(1 for char in text if char in self.printable)
-        # Choti strings ke liye 100% printable hona chahiye
-        if len(text) < 10: return p_count == len(text)
-        # Lambi strings ke liye 85% kafi hai
-        return (p_count / len(text)) > 0.85
+        """Kachra saaf karke raw hex nikaalta hai"""
+        lines = data.strip().split('\n')
+        cleaned = ""
+        for line in lines:
+            # Remove addresses like 00000000
+            line = re.sub(r'^[0-9a-fA-F]{8}', '', line)
+            # Remove sidebar preview
+            if "|" in line: line = line.split("|")[0]
+            cleaned += line.strip() + " "
+        
+        # Agar Hex format hai toh spaces khatam karo
+        if any(c in 'abcdefABCDEF' for c in cleaned) or " " in cleaned:
+            tmp = re.sub(r'[^0-9a-fA-F]', '', cleaned)
+            if len(tmp) % 2 == 0 and len(tmp) > 0:
+                return tmp
+        return data.strip()
 
     def get_methods(self):
-        """CyberChef ke top algorithms ki list"""
         return [
             ("Base64", lambda d: base64.b64decode(d).decode('utf-8')),
-            ("Hex", lambda d: binascii.unhexlify(re.sub(r'\s+', '', d)).decode('utf-8')),
+            ("Hex", lambda d: binascii.unhexlify(d).decode('utf-8')),
             ("URL", lambda d: urllib.parse.unquote(d)),
-            ("HTML", lambda d: html.unescape(d)),
             ("ROT13", lambda d: codecs.encode(d, 'rot_13')),
             ("ROT47", lambda d: "".join([chr(33 + ((ord(c) - 33 + 47) % 94)) if 33 <= ord(c) <= 126 else c for c in d])),
-            ("Base32", lambda d: base64.b32decode(d).decode('utf-8')),
             ("Decimal", lambda d: "".join([chr(int(x)) for x in re.findall(r'\d+', d) if 31 < int(x) < 127])),
-            ("Unicode-Escape", lambda d: codecs.decode(d, 'unicode_escape'))
         ]
 
-    def burst_recursive(self, data, depth=0, chain=""):
-        # 10 layers ki limit (Hacker bhi itni encryption nahi karta)
-        if depth > 10: return 
+    def burst_all(self, data):
+        """Har algorithm ko try karke result store karega chahe wo readable ho ya na ho"""
+        cleaned = self.clean_input(data)
         
-        # Raw aur Cleaned dono versions try karein
-        to_test = list(set([data, self.clean_input(data)]))
-        
-        for current in to_test:
-            if not current: continue
-            for name, func in self.get_methods():
-                try:
-                    decoded = func(current)
-                    if decoded and decoded != current and self.is_readable(decoded):
-                        new_chain = f"{chain} -> {name}" if chain else name
-                        
-                        # Sirf unique results save karein
-                        if not any(decoded == res[2] for res in self.results):
-                            self.results.append(["DEEP", new_chain, decoded])
-                        
-                        # Agli layer check karein
-                        self.burst_recursive(decoded, depth + 1, new_chain)
-                except: continue
+        # First Layer Trial
+        for name, func in self.get_methods():
+            try:
+                decoded = func(cleaned)
+                if decoded:
+                    self.results.append([name, decoded])
+                    
+                    # Second Layer Trial (Recursive)
+                    for n2, f2 in self.get_methods():
+                        try:
+                            d2 = f2(decoded.strip())
+                            if d2 and d2 != decoded:
+                                self.results.append([f"{name} -> {n2}", d2])
+                        except: continue
+            except: continue
 
 def main():
     while True:
         os.system('clear')
-        console.print(Panel.fit("💀 ALGOBURST ULTIMATE: NO LIMITS 💀", style="bold magenta"))
+        console.print(Panel.fit("💀 ALGOBURST: FULL VERBOSE MODE 💀", style="bold red"))
         
-        payload = console.input("[bold yellow]Paste Encoded Data (q to quit): [/bold yellow]").strip()
-        if payload.lower() in ['q', 'exit']: break
-        if not payload: continue
+        payload = console.input("[bold yellow]Paste Data >>> [/bold yellow]").strip()
+        if payload.lower() == 'q': break
         
         master = AlgoBurstMaster()
-        master.burst_recursive(payload)
+        master.burst_all(payload)
         
         if master.results:
-            table = Table(title="Decoded Results Found", show_header=True, header_style="bold cyan")
-            table.add_column("Mode", style="magenta")
-            table.add_column("Recipe Chain", style="yellow")
-            table.add_column("Plaintext", style="green")
-            for r in master.results:
-                table.add_row(r[0], r[1], r[2])
+            table = Table(title="All Possible Decodings", show_lines=True)
+            table.add_column("Algorithm(s) Applied", style="cyan", no_wrap=True)
+            table.add_column("Result (Raw Output)", style="green")
+
+            for recipe, output in master.results:
+                # Agar output mein 'hello' hai toh red color mein dikhao
+                display_output = output
+                if "hello" in output.lower():
+                    display_output = f"[bold red reverse] {output} [/bold red reverse] 🔥"
+                
+                table.add_row(recipe, display_output)
+            
             console.print(table)
         else:
-            console.print("[bold red][!] No valid decoding chain found.[/bold red]")
+            console.print("[bold red][!] Decoding failed on all methods.[/bold red]")
         
         input("\n[dim]Press Enter for next scan...[/dim]")
 
